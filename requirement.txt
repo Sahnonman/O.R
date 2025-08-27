@@ -1,2 +1,0 @@
-pip install streamlit pandas openpyxl pulp
-streamlit run app.py

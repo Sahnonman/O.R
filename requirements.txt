@@ -1,0 +1,8 @@
+pip install streamlit pandas openpyxl pulp
+streamlit run app.py
+streamlit==1.37.0
+pandas==2.2.2
+numpy==2.0.1
+pulp==2.8.0
+openpyxl==3.1.5
+
