@@ -73,7 +73,8 @@ def build_and_solve(
     monthly_df: pd.DataFrame,
     min_demand_df: pd.DataFrame,
     month_num: int,
-    use_integer: bool
+    use_integer: bool,
+    threepl_cost_cap: float = 200000.0,  # NEW: 3PL cost cap
 ):
     # --- Normalize/clean ---
     duration_df = duration_df.copy()
@@ -214,11 +215,18 @@ def build_and_solve(
             lhs = (lpSum(zA[d][k] for k in KA) if len(KA) > 0 else 0) + z3[d]
             prob += lhs >= v
 
-    # Forbid 3PL
+    # Forbid 3PL where cost is NA or destination missing in costs
     for d in NO_3PL_DESTS:
         if d in DEST:
             prob += z3[d] == 0
 
+    # ---- NEW: Cap total 3PL cost ----
+    total_3pl_cost_expr = lpSum(
+        (0.0 if cost3.get(d) is None else float(cost3[d])) * z3[d] for d in DEST
+    )
+    prob += (total_3pl_cost_expr <= float(threepl_cost_cap)), "Cap_3PL_Cost"
+
+    # Solve
     prob.solve(PULP_CBC_CMD(msg=False))
     status = LpStatus[prob.status]
 
@@ -243,7 +251,8 @@ def build_and_solve(
         hours_limit=HOURS_LIMIT,
         vehicles=len(KA),
         solver="cbc",
-        status=status
+        status=status,
+        threepl_cost_cap=threepl_cost_cap,  # NEW
     )
     return outputs, diagnostics, meta
 
@@ -426,6 +435,9 @@ with st.sidebar:
     month_num = st.selectbox("Month", list(range(1, 13)), index=6, help="Choose month number (1..12)")
     use_integer = st.toggle("Integer trips", value=True, help="If off, allows fractional trips")
 
+    # NEW: 3PL cost cap control
+    threepl_cost_cap = st.number_input("3PL cost cap (SAR)", min_value=0, step=10000, value=200000)
+
     run = st.button("Optimize", type="primary")
 
 if up and run:
@@ -453,7 +465,7 @@ if up and run:
 
         outputs, diagnostics, meta = build_and_solve(
             duration_df, tlimit_df, vehicles_df, costs_df, monthly_df, min_demand_df,
-            month_num, use_integer
+            month_num, use_integer, threepl_cost_cap=threepl_cost_cap
         )
 
         # KPIs
@@ -468,7 +480,10 @@ if up and run:
         c2.metric("Status", meta["status"])
         c3.metric("Total Cost (SAR)", f"{tot:,.0f}")
         c4.metric("Vehicles", meta["vehicles"])
-        st.caption(f"Month {meta['month']} • Days: {meta['days']} • Hours/vehicle limit: {meta['hours_limit']:.1f}")
+        st.caption(
+            f"Month {meta['month']} • Days: {meta['days']} • Hours/vehicle limit: {meta['hours_limit']:.1f} • "
+            f"3PL cost cap: {int(meta.get('threepl_cost_cap', 0)):,} SAR"
+        )
 
         tabs = st.tabs(["Summary", "Cost Breakdown", "Per Destination", "Per Vehicle", "Daily (avg/day)", "Narrative", "Diagnostics", "Export"])
 
@@ -522,6 +537,9 @@ if up and run:
                 file_name="Alrugaib_Monthly_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+        if meta["status"] != "Optimal":
+            st.warning("Solution is not Optimal. Consider relaxing constraints (e.g., increase 3PL cost cap, add vehicles, or increase hours/vehicle).")
 
     except Exception as e:
         st.error(f"Error: {e}")
